@@ -1,0 +1,159 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "images/**"
+      - "scripts/**"
+      - ".github/workflows/build.yml"
+  pull_request:
+    paths:
+      - "images/**"
+      - "scripts/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  detect:
+    name: detect changed images
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.detect.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - id: detect
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          all=$(find images -mindepth 2 -maxdepth 2 -name Dockerfile -printf '%h\n' | xargs -rn1 basename | sort)
+
+          case "$EVENT" in
+            workflow_dispatch) base="" ;;
+            pull_request)      base="$BASE_SHA" ;;
+            push)              base="$BEFORE" ;;
+          esac
+
+          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ] \
+             || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "no usable base ($EVENT): building all images"
+            selected="$all"
+          else
+            changed=$(git diff --name-only "$base" "$GITHUB_SHA")
+            echo "changed files:"; echo "$changed" | sed 's/^/  /'
+            if echo "$changed" | grep -qE '^(\.github/workflows/build\.yml|scripts/)'; then
+              echo "workflow or shared scripts changed: building all images"
+              selected="$all"
+            else
+              selected=$(echo "$changed" | awk -F/ '$1 == "images" && NF > 2 {print $2}' | sort -u \
+                         | while read -r d; do [ -f "images/$d/Dockerfile" ] && echo "$d" || true; done)
+            fi
+          fi
+
+          images=$(printf '%s\n' $selected | jq -Rnc '[inputs | select(length > 0)]')
+          echo "images=$images" | tee -a "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.image }}
+    needs: detect
+    if: needs.detect.outputs.images != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.detect.outputs.images) }}
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+      CONTEXT: images/${{ matrix.image }}
+      PUSH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read VERSION
+        id: version
+        run: |
+          set -euo pipefail
+          v=$(tr -d '[:space:]' < "$CONTEXT/VERSION")
+          [ -n "$v" ] || { echo "::error::$CONTEXT/VERSION is empty"; exit 1; }
+          echo "version=$v" | tee -a "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        if: env.PUSH == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.image }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+
+      # 1. Build and load into the local Docker engine for the smoke test.
+      - name: Build (load)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ env.CONTEXT }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}:smoke-test
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      # 2. Run as uid 10001, check the tool version and that no credentials are baked in.
+      - name: Smoke test
+        env:
+          CONTAINER_ENGINE: docker
+        run: |
+          scripts/smoke-test.sh "${{ matrix.image }}" "$IMAGE:smoke-test"
+          docker image inspect "$IMAGE:smoke-test" --format 'size: {{.Size}} bytes'
+
+      # 3. Push only after the smoke test passed (layers come from the build cache).
+      - name: Push
+        if: env.PUSH == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ env.CONTEXT }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.image }} ${{ steps.version.outputs.version }}"
+            echo "pushed: $PUSH"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
