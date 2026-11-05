@@ -1,0 +1,80 @@
+# OpenShell sandbox policy for the claude-code image.
+# Modelled on the `claude_code`, `github_ssh_over_https` and `github_rest_api`
+# blocks of NVIDIA/OpenShell-Community sandboxes/base/policy.yaml
+# (commit edb65583a32c9ebb0fe8b6c709949e19ece08e52), trimmed to Anthropic + GitHub.
+# Copied to /etc/openshell/policy.yaml. A policy passed at `openshell sandbox
+# create --policy` takes precedence.
+#
+# UNTESTED: not yet validated against the k3s gateway (OpenShell 0.1.7).
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /proc
+    - /dev/urandom
+    - /etc
+    - /var/log
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev/null
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+  claude_code:
+    name: claude-code
+    endpoints:
+      # Inference. TLS is terminated so the OpenShell proxy can swap the
+      # provider placeholder (ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN) for
+      # the real credential.
+      - { host: api.anthropic.com, port: 443, protocol: rest, enforcement: enforce, access: full, tls: terminate }
+      # OAuth / account endpoints used by subscription (setup-token) auth.
+      - { host: platform.claude.com, port: 443 }
+      - { host: claude.ai, port: 443 }
+      # The community policy also allows these. The image sets
+      # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1, so telemetry/error
+      # reporting should not need them. Uncomment if something breaks.
+      # - { host: statsig.anthropic.com, port: 443 }
+      # - { host: sentry.io, port: 443 }
+      # - { host: raw.githubusercontent.com, port: 443 }
+    binaries:
+      - { path: /usr/local/bin/claude }
+
+  github_git:
+    name: github-git
+    endpoints:
+      - host: github.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/**/info/refs*" }
+          - allow: { method: POST, path: "/**/git-upload-pack" }
+          # Uncomment to allow push:
+          # - allow: { method: POST, path: "/**/git-receive-pack" }
+    binaries:
+      - { path: /usr/bin/git }
+      - { path: /usr/lib/git-core/git-remote-https }
+
+  github_rest_api:
+    name: github-rest-api
+    endpoints:
+      - host: api.github.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        access: read-only
+    binaries:
+      - { path: /usr/bin/gh }
+      - { path: /usr/local/bin/claude }

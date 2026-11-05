@@ -1,0 +1,30 @@
+# OpenShell provider profile for Claude Code with a Claude subscription token
+# (`claude setup-token`) instead of an API key. NVIDIA's providers/claude-code.yaml
+# only declares ANTHROPIC_API_KEY / CLAUDE_API_KEY sent as x-api-key; an OAuth
+# token is sent as `Authorization: Bearer`, so it needs its own profile.
+#
+# UNTESTED. Lint before importing:
+#   openshell profile lint   -f images/claude-code/providers/claude-code-oauth.yaml
+#   openshell profile import -f images/claude-code/providers/claude-code-oauth.yaml --global
+
+id: claude-code-oauth
+display_name: Claude Code (subscription OAuth token)
+description: Claude Code CLI authenticated with a long-lived token from `claude setup-token`
+category: agent
+inference_capable: true
+credentials:
+  - name: oauth_token
+    description: Long-lived Claude OAuth token from `claude setup-token`
+    env_vars: [CLAUDE_CODE_OAUTH_TOKEN]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+discovery:
+  credentials: [oauth_token]
+endpoints:
+  - host: api.anthropic.com
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+binaries: [/usr/local/bin/claude]
