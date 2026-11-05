@@ -1,0 +1,14 @@
+# Never commit credentials
+.env
+.env.*
+auth.json
+.credentials.json
+*.pem
+*.key
+
+# Local build / editor clutter
+*.tar
+*.tgz
+.DS_Store
+.idea/
+.vscode/
