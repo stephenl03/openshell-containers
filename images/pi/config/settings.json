@@ -1,0 +1,12 @@
+{
+  "quietStartup": true,
+  "theme": "marvino",
+  "defaultProvider": "anthropic",
+  "defaultThinkingLevel": "high",
+  "hideThinkingBlock": false,
+  "autoCompleteMaxVisible": 5,
+  "collapseChangelog": true,
+  "enableInstallTelemetry": false,
+  "enableAnalytics": false,
+  "packages": []
+}

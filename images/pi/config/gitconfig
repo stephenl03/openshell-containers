@@ -1,0 +1,10 @@
+# System git config (/etc/gitconfig). Lives in the image, not in the /sandbox
+# PVC, so it stays current across image upgrades.
+[credential "https://github.com"]
+	helper =
+	helper = !/usr/bin/gh auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !/usr/bin/gh auth git-credential
+[init]
+	defaultBranch = main
