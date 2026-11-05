@@ -1,3 +1,5 @@
+# Build, smoke-test and push the images under images/ to ghcr.io/<owner>/<dir>.
+# See README.md#ci for triggers and tags.
 name: build
 
 on:
